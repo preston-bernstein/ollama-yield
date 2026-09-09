@@ -28,11 +28,21 @@ It detects Steam and Proton games, Lutris, Heroic, and Wine, plus Plex and Tdarr
 
 One detail worth knowing: Plex runs its transcoder binary for background maintenance, such as intro detection and thumbnail generation, on its own schedule. A process-name match alone would give false positives and pause your inference for no reason. When you give it a Plex token, it checks Plex's own session list before deciding a transcode is real.
 
+## What it deliberately does not do
+
+Scope, stated up front so a change that fights it can be recognised early.
+
+- **It does not pause and resume a generation in progress.** There is no KV cache serialization. A request interrupted by a game is canceled and has to be retried; a durable job re-runs from the start rather than continuing. Doing it properly needs support inside Ollama, which is [an open request there](https://github.com/ollama/ollama/issues/17298).
+- **It arbitrates one machine's GPU.** Detection reads the local `/proc`, so it has no view of other hosts. It is not a cluster scheduler.
+- **It does not replace Ollama.** It sits in front of Ollama and speaks the same API. Models, prompts and generation are still Ollama's job.
+
 ## Requirements
 
 - **Linux.** Detection reads `/proc`. On other systems it reports no contention and the yield feature does nothing.
 - **Go 1.24 or newer** to build. The binary is static, with no C dependencies.
 - **Ollama**, or any OpenAI-compatible server such as vLLM.
+
+Contributions are welcome, and [`CONTRIBUTING.md`](CONTRIBUTING.md) says what gets merged quickly. Adding another game launcher or transcoder to the detection rules is a small, self-contained first change.
 
 ## Quick start
 
