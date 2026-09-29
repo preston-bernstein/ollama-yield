@@ -881,3 +881,25 @@ func TestLoadRouteIdleTimeoutZeroDisabled(t *testing.T) {
 		t.Errorf("Routes[0].IdleTimeout = %v, want 0", cfg.Routes[0].IdleTimeout)
 	}
 }
+
+func TestLoadCPUModels(t *testing.T) {
+	t.Setenv("OLLAMA_URL", "http://127.0.0.1:11434")
+	t.Setenv("BROKER_CPU_MODELS", " bge-m3-cpu , ,nomic-embed-cpu:latest")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"bge-m3-cpu", "nomic-embed-cpu:latest"}
+	if fmt.Sprint(cfg.CPUModels) != fmt.Sprint(want) {
+		t.Errorf("CPUModels = %q, want %q (trimmed, empties dropped)", cfg.CPUModels, want)
+	}
+
+	t.Setenv("BROKER_CPU_MODELS", "")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CPUModels != nil {
+		t.Errorf("CPUModels = %q, want nil when unset (bypass off)", cfg.CPUModels)
+	}
+}

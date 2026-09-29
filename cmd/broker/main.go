@@ -73,6 +73,7 @@ func main() {
 	sched := queue.New()
 	sched.SetMaxWaiters(cfg.MaxWaiters)
 	sched.SetMaxInflight(cfg.MaxInflight)
+	sched.SetCPUModels(cfg.CPUModels) // ADR-0018: CPU-only models skip the GPU slot
 	sched.SetParkConfig(cfg.ParkHold, cfg.ParkMaxQueue, cfg.ParkDrainBurst)
 	detector := detect.New(detect.ProcLister)
 	if cfg.PlexToken != "" {

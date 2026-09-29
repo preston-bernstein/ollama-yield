@@ -113,6 +113,7 @@ Read next:
 | `PLEX_TOKEN` | _(unset)_ | Plex API token. Unset disables Plex session corroboration entirely (a process-name match alone is treated as contention, the pre-existing behavior) |
 | `BROKER_MAX_WAITERS` | `256` | Max queued requests per class before fast 503 |
 | `BROKER_MAX_INFLIGHT` | `1` | Max concurrent requests reaching Ollama (ADR-0004) |
+| `BROKER_CPU_MODELS` | empty | Comma-separated models that run on CPU only. Their requests skip the GPU slot and GPU Yields (ADR-0018). Empty turns this off. |
 | `BROKER_BATCH_QUANTUM` | `10s` | Min-run window before interactive may preempt a Job |
 | `BROKER_PARK_HOLD` | `600s` | Max time a Batch request may stay parked during yield (ADR-0009) |
 | `BROKER_PARK_MAX_QUEUE` | `32` | Max parked Batch requests; 0 disables parking (ADR-0009, kill-switch) |
