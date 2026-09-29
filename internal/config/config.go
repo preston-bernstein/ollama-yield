@@ -133,6 +133,10 @@ type Config struct {
 	MaxWaiters int
 	// MaxInflight caps concurrent requests reaching Ollama (ADR-0004).
 	MaxInflight int
+	// CPUModels are models that run on CPU only (BROKER_CPU_MODELS, comma
+	// separated). Their requests skip the GPU slot and GPU yields
+	// (ADR-0018). Nil turns the bypass off.
+	CPUModels []string
 	// BatchQuantum is the min-run window before interactive may preempt a Job.
 	BatchQuantum time.Duration
 
@@ -460,6 +464,7 @@ func Load() (*Config, error) {
 		PlexToken:           getenv("PLEX_TOKEN", ""),
 		MaxWaiters:          mw,
 		MaxInflight:         mi,
+		CPUModels:           splitList(getenv("BROKER_CPU_MODELS", "")),
 		BatchQuantum:        bq,
 		JobDBPath:           getenv("BROKER_JOB_DB", "broker-jobs.db"),
 		JobMaxAttempts:      jma,
@@ -488,6 +493,18 @@ func parseBaseURL(key, raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("%s %q must include scheme and host", key, raw)
 	}
 	return u, nil
+}
+
+// splitList splits a comma-separated value, trimming spaces and dropping
+// empty entries. It returns nil when nothing is left.
+func splitList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func getenv(key, def string) string {

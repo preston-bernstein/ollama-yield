@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/preston-bernstein/resource-broker/internal/httpx"
 	"github.com/preston-bernstein/resource-broker/internal/yield"
 )
 
@@ -91,25 +92,22 @@ func TestRouterHappyPathDispatch(t *testing.T) {
 // vision-style payload with "model" as the first JSON field must be
 // dispatched correctly, with the forwarded body byte-identical to what was
 // sent, AND the peek step itself must not have buffered the large payload —
-// verified directly against peekModel, which is the only place Router reads
+// verified directly against httpx.PeekModel, which is the only place Router reads
 // from the body before forwarding.
 func TestRouterLargeBodyModelPeekNotFullyBuffered(t *testing.T) {
 	// Build an ~8MB body: {"model":"vision-model","images":["<8MB of base64-ish filler>"]}
 	filler := strings.Repeat("A", 8*1024*1024)
 	body := `{"model":"vision-model","images":["` + filler + `"]}`
 
-	// 1. Prove peekModel itself doesn't buffer the large payload: consumed
+	// 1. Prove httpx.PeekModel itself doesn't buffer the large payload: consumed
 	// bytes should be a tiny fraction of the 8MB body, since "model" is the
-	// first field and peekModel stops right after decoding it.
-	model, consumed, err := peekModel(strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("peekModel() error = %v", err)
-	}
+	// first field and httpx.PeekModel stops right after decoding it.
+	model, consumed := httpx.PeekModel(strings.NewReader(body))
 	if model != "vision-model" {
-		t.Fatalf("peekModel() model = %q, want %q", model, "vision-model")
+		t.Fatalf("httpx.PeekModel() model = %q, want %q", model, "vision-model")
 	}
 	if len(consumed) > 4096 {
-		t.Fatalf("peekModel() consumed %d bytes finding an early model field, want a small peek (not the full %d-byte body)", len(consumed), len(body))
+		t.Fatalf("httpx.PeekModel() consumed %d bytes finding an early model field, want a small peek (not the full %d-byte body)", len(consumed), len(body))
 	}
 
 	// 2. Prove the full dispatch path still forwards a byte-identical body
