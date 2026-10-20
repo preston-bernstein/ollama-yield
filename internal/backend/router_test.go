@@ -634,11 +634,22 @@ func TestRouterIdleThenContentionUnloadOrderingIsNeverConflicting(t *testing.T) 
 		t.Fatalf("Yielding() = (%v,%q), want yielding=true once Contention is active", y, reason)
 	}
 
-	// Clear Contention: the instance should now Reload, strictly after both
-	// prior Unload calls.
+	// Clear Contention: the instance was idle-unloaded before the Yield, so
+	// the clear must leave it unloaded (2026-10-20 change, ADR-0016
+	// amendment). The next routed request wakes it, and that Reload must
+	// still land strictly after both prior Unload calls.
 	det.setContended(false)
+	if !waitUntil(t, func() bool { y, _ := ctrl.Yielding(); return !y }) {
+		t.Fatal("Contention never cleared")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := u.orderLen(); got != 2 {
+		t.Fatalf("Contention-clear reloaded an idle-unloaded instance: order = %v, want [unload unload]", u.snapshot())
+	}
+	w = httptest.NewRecorder()
+	r.ProxyForLane("interactive").ServeHTTP(w, newTestRequest(t, `{"model":"vllm-model"}`))
 	if !waitUntil(t, func() bool { return u.orderLen() == 3 }) {
-		t.Fatal("Contention-clear never fired a Reload for the instance")
+		t.Fatal("a routed request never woke the idle-unloaded instance after Contention cleared")
 	}
 
 	got := u.snapshot()
