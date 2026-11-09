@@ -44,6 +44,11 @@ type RouteBackend struct {
 	// Lane optionally scopes this rule to a single lane: "interactive" or
 	// "batch". Empty (the default) means the rule applies to both lanes.
 	Lane string
+	// Displaces lists BROKER_YIELD_UNITS entries that give this instance the
+	// GPU (BROKER_ROUTE_<N>_DISPLACES, comma separated; ADR-0020): they run
+	// only while this instance is idle-unloaded. Requires IdleTimeout, so the
+	// instance always hands the GPU back.
+	Displaces []string
 }
 
 // Config holds all broker runtime settings.
@@ -133,6 +138,12 @@ type Config struct {
 	MaxWaiters int
 	// MaxInflight caps concurrent requests reaching Ollama (ADR-0004).
 	MaxInflight int
+	// YieldUnits are extra systemd units the Broker stops on yield-start and
+	// starts on yield-clear (BROKER_YIELD_UNITS, comma separated), for GPU
+	// workloads that are not inference backends the Broker fronts (ADR-0019).
+	// Each must be unique and must not repeat UPSTREAM_UNIT_NAME or any
+	// BROKER_ROUTE_<N>_UNIT_NAME. Nil turns this off.
+	YieldUnits []string
 	// CPUModels are models that run on CPU only (BROKER_CPU_MODELS, comma
 	// separated). Their requests skip the GPU slot and GPU yields
 	// (ADR-0018). Nil turns the bypass off.
@@ -437,8 +448,17 @@ func Load() (*Config, error) {
 				UnitName:    routeUnitName,
 				IdleTimeout: routeIdleTimeout,
 				Lane:        lane,
+				Displaces:   splitList(getenv(prefix+"DISPLACES", "")),
 			})
 		}
+	}
+
+	yieldUnits, err := parseYieldUnits(getenv("BROKER_YIELD_UNITS", ""), unitName, routes)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkDisplaces(routes, yieldUnits); err != nil {
+		return nil, err
 	}
 
 	return &Config{
@@ -464,6 +484,7 @@ func Load() (*Config, error) {
 		PlexToken:           getenv("PLEX_TOKEN", ""),
 		MaxWaiters:          mw,
 		MaxInflight:         mi,
+		YieldUnits:          yieldUnits,
 		CPUModels:           splitList(getenv("BROKER_CPU_MODELS", "")),
 		BatchQuantum:        bq,
 		JobDBPath:           getenv("BROKER_JOB_DB", "broker-jobs.db"),
@@ -497,6 +518,60 @@ func parseBaseURL(key, raw string) (*url.URL, error) {
 
 // splitList splits a comma-separated value, trimming spaces and dropping
 // empty entries. It returns nil when nothing is left.
+// parseYieldUnits reads BROKER_YIELD_UNITS. A unit already stopped and
+// started by the default backend or a route would get two controllers
+// racing each other on every yield, so that is rejected, as is a repeat.
+func parseYieldUnits(raw, upstreamUnit string, routes []RouteBackend) ([]string, error) {
+	owners := map[string]string{}
+	if upstreamUnit != "" {
+		owners[upstreamUnit] = "UPSTREAM_UNIT_NAME"
+	}
+	for i, rb := range routes {
+		if rb.UnitName != "" {
+			owners[rb.UnitName] = fmt.Sprintf("BROKER_ROUTE_%d_UNIT_NAME", i+1)
+		}
+	}
+	units := splitList(raw)
+	for _, u := range units {
+		if owner, ok := owners[u]; ok {
+			return nil, fmt.Errorf("BROKER_YIELD_UNITS: %q is already used by %s", u, owner)
+		}
+		owners[u] = "BROKER_YIELD_UNITS"
+	}
+	return units, nil
+}
+
+// checkDisplaces validates every BROKER_ROUTE_<N>_DISPLACES (ADR-0020). A
+// displaced unit must be a yield unit, since only those have a controller of
+// their own to start and stop. A displacer needs an idle timeout, or it would
+// keep the units off forever after its first request.
+func checkDisplaces(routes []RouteBackend, yieldUnits []string) error {
+	known := map[string]bool{}
+	for _, u := range yieldUnits {
+		known[u] = true
+	}
+	for i, rb := range routes {
+		if len(rb.Displaces) == 0 {
+			continue
+		}
+		key := fmt.Sprintf("BROKER_ROUTE_%d_DISPLACES", i+1)
+		if rb.IdleTimeout == 0 {
+			return fmt.Errorf("%s is set but BROKER_ROUTE_%d_IDLE_TIMEOUT is not; a displacing route must idle-unload to hand the GPU back", key, i+1)
+		}
+		seen := map[string]bool{}
+		for _, u := range rb.Displaces {
+			if !known[u] {
+				return fmt.Errorf("%s: %q is not in BROKER_YIELD_UNITS", key, u)
+			}
+			if seen[u] {
+				return fmt.Errorf("%s: %q is listed twice", key, u)
+			}
+			seen[u] = true
+		}
+	}
+	return nil
+}
+
 func splitList(raw string) []string {
 	var out []string
 	for _, part := range strings.Split(raw, ",") {
