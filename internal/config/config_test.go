@@ -1011,3 +1011,34 @@ func TestLoadRouteDisplacesRejectsBadConfig(t *testing.T) {
 		})
 	}
 }
+
+// --- Displaced-unit resume hold-off (BROKER_YIELD_UNIT_RESUME_HOLDOFF, ADR-0021) ---
+
+func TestLoadUnitResumeHoldoff(t *testing.T) {
+	cases := map[string]time.Duration{"": 0, "5m": 5 * time.Minute}
+	for v, want := range cases {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("OLLAMA_URL", "http://127.0.0.1:11434")
+			t.Setenv("BROKER_YIELD_UNIT_RESUME_HOLDOFF", v)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.UnitResumeHoldoff != want {
+				t.Fatalf("UnitResumeHoldoff = %v, want %v", cfg.UnitResumeHoldoff, want)
+			}
+		})
+	}
+}
+
+func TestLoadUnitResumeHoldoffRejectsBadValues(t *testing.T) {
+	for _, v := range []string{"-1m", "soon"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("OLLAMA_URL", "http://127.0.0.1:11434")
+			t.Setenv("BROKER_YIELD_UNIT_RESUME_HOLDOFF", v)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted BROKER_YIELD_UNIT_RESUME_HOLDOFF=%q", v)
+			}
+		})
+	}
+}

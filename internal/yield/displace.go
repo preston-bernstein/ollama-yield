@@ -3,6 +3,7 @@ package yield
 import (
 	"fmt"
 	"log/slog"
+	"time"
 )
 
 // Displacement (ADR-0020): a route's backend may displace yield units. A
@@ -21,6 +22,8 @@ import (
 //   - unitWant[j]:   whether j was last commanded to run (true) or stop.
 //   - pollCount:     refresh ticks so far; reconcile waits for confirmPolls of
 //     them, so a broker started mid-game never starts a unit just to stop it.
+//   - unitFreeSince[j]: when j's GPU last became free (zero while it is not).
+//     With a hold-off set, j starts only once that is unitHoldoff old.
 
 // ConfigureDisplace records which instances displace which, keyed by ORIG
 // index (the space ConfigureIdle takes): displace[i] lists the orig indexes
@@ -41,6 +44,7 @@ func (c *Controller) ConfigureDisplace(displace map[int][]int) {
 	c.displacers = make([][]int, n)
 	c.displaces = make([][]int, n)
 	c.unitWant = make([]bool, n)
+	c.unitFreeSince = make([]time.Time, n)
 	for origI, units := range displace {
 		i := c.postIndex(origI, "displacer")
 		if c.idleTimeouts[i] == 0 {
@@ -60,6 +64,17 @@ func (c *Controller) ConfigureDisplace(displace map[int][]int) {
 		wait, done := c.startAction(i)
 		go c.doUnload(i, wait, done, triggerIdle)
 	}
+}
+
+// SetUnitResumeHoldoff makes a displaced unit wait until its GPU has been
+// free for d before it starts again (ADR-0021). A Plex session can yield and
+// clear every minute, and a unit stopped seconds after it starts is stopped
+// mid-setup, which once wedged the GPU. Stops are never held off. Call it
+// before Run; d <= 0 turns the hold-off off.
+func (c *Controller) SetUnitResumeHoldoff(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.unitHoldoff = d
 }
 
 func (c *Controller) postIndex(orig int, what string) int {
@@ -82,6 +97,7 @@ func (c *Controller) reconcileDisplacedLocked() {
 	if c.displacers == nil || c.pollCount < c.confirmPolls {
 		return
 	}
+	now := time.Now()
 	for j, ds := range c.displacers {
 		if len(ds) == 0 {
 			continue
@@ -92,7 +108,15 @@ func (c *Controller) reconcileDisplacedLocked() {
 				want = false
 			}
 		}
+		if !want {
+			c.unitFreeSince[j] = time.Time{}
+		} else if c.unitFreeSince[j].IsZero() {
+			c.unitFreeSince[j] = now
+		}
 		if want == c.unitWant[j] {
+			continue
+		}
+		if want && now.Sub(c.unitFreeSince[j]) < c.unitHoldoff {
 			continue
 		}
 		c.unitWant[j] = want

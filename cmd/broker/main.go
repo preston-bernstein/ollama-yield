@@ -449,6 +449,7 @@ func buildBroker(cfg *config.Config, detector yield.Detector, be backend.Backend
 			}
 		}
 		ctrl.ConfigureDisplace(displace)
+		ctrl.SetUnitResumeHoldoff(cfg.UnitResumeHoldoff)
 
 		// Decorate in place — orig index 0 is the default backend, i+1 is
 		// route i — BEFORE NewRouter/AddRoute below capture these values.

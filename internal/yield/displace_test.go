@@ -234,3 +234,58 @@ func TestNoDisplaceKeepsOldBehaviour(t *testing.T) {
 		t.Fatalf("yield/clear did not stop and start the unit: %v", tl.snapshot())
 	}
 }
+
+// backdateFree pretends the unit's GPU became free d ago.
+func backdateFree(c *Controller, d time.Duration) {
+	c.mu.Lock()
+	j := c.origToFiltered[2]
+	if !c.unitFreeSince[j].IsZero() {
+		c.unitFreeSince[j] = c.unitFreeSince[j].Add(-d)
+	}
+	c.mu.Unlock()
+}
+
+func TestDisplaceHoldoffDelaysRestartAfterClear(t *testing.T) {
+	c, d, tl, _ := newDisplaceRig(t, 1, nil)
+	c.SetUnitResumeHoldoff(5 * time.Minute)
+	c.refresh()
+	backdateFree(c, 5*time.Minute)
+	c.refresh()
+	if !eventually(t, func() bool { return tl.count("gpu start") == 1 }) {
+		t.Fatalf("unit never started once its GPU had been free for the hold-off: %v", tl.snapshot())
+	}
+	d.set("plex", true)
+	c.refresh()
+	if !eventually(t, func() bool { return tl.count("gpu stopped") == 1 }) {
+		t.Fatalf("hold-off delayed the yield's stop: %v", tl.snapshot())
+	}
+	d.set("", false)
+	c.refresh()
+	c.refresh()
+	time.Sleep(50 * time.Millisecond)
+	if n := tl.count("gpu start"); n != 1 {
+		t.Fatalf("unit restarted inside the hold-off (%d starts): %v", n, tl.snapshot())
+	}
+	backdateFree(c, 5*time.Minute)
+	c.refresh()
+	if !eventually(t, func() bool { return tl.count("gpu start") == 2 }) {
+		t.Fatalf("unit not restarted after the hold-off: %v", tl.snapshot())
+	}
+}
+
+func TestDisplaceHoldoffRestartsTheClockOnAFlap(t *testing.T) {
+	c, d, tl, _ := newDisplaceRig(t, 1, nil)
+	c.SetUnitResumeHoldoff(5 * time.Minute)
+	c.refresh()
+	backdateFree(c, 4*time.Minute) // 4 of 5 minutes free
+	d.set("plex", true)
+	c.refresh() // a yield resets the clock
+	d.set("", false)
+	c.refresh()
+	backdateFree(c, 4*time.Minute) // 4 minutes since the clear, 8 in total
+	c.refresh()
+	time.Sleep(50 * time.Millisecond)
+	if n := tl.count("gpu start"); n != 0 {
+		t.Fatalf("free time before the yield counted toward the hold-off (%d starts): %v", n, tl.snapshot())
+	}
+}
