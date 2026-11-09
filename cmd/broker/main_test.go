@@ -519,3 +519,51 @@ func TestBuildBrokerStopsAndStartsYieldUnits(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildBrokerWiresRouteDisplacement checks ADR-0020's index mapping end to
+// end: the displacing route is stopped once at start, then the unit starts; a
+// request to the route stops the unit before the route's backend starts.
+func TestBuildBrokerWiresRouteDisplacement(t *testing.T) {
+	calls := make(chan string, 16)
+	origUnit, origRoute := newUnitUnloader, routeUnloader
+	newUnitUnloader = func(unit string) yield.Unloader { return recordingUnloader{unit, calls} }
+	routeUnloader = func(rb config.RouteBackend, _ backend.Backend) yield.Unloader {
+		return recordingUnloader{rb.UnitName, calls}
+	}
+	t.Cleanup(func() { newUnitUnloader, routeUnloader = origUnit, origRoute })
+
+	routeURL, _ := url.Parse("http://127.0.0.1:19997")
+	defaultURL, _ := url.Parse("http://127.0.0.1:19999")
+	be, err := backend.NewInstance("openai", defaultURL, "", "")
+	if err != nil {
+		t.Fatalf("build default backend: %v", err)
+	}
+	cfg := &config.Config{
+		DetectInterval:    time.Minute,
+		YieldConfirmPolls: 1,
+		Routes: []config.RouteBackend{{
+			Models: []string{"qwen2.5"}, Backend: "openai", URL: routeURL,
+			UnitName: "vllm", IdleTimeout: time.Hour, Displaces: []string{"gpu-worker.service"},
+		}},
+		YieldUnits: []string{"other.service", "gpu-worker.service"},
+	}
+	router, _, ctrl, _, err := buildBroker(cfg, stubDetector{}, be)
+	if err != nil {
+		t.Fatalf("buildBroker: %v", err)
+	}
+	expectCall(t, calls, "stop vllm")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go ctrl.Run(ctx)
+	expectCall(t, calls, "start gpu-worker.service")
+
+	req := httptest.NewRequest("POST", "/api/chat", strings.NewReader(`{"model":"qwen2.5","messages":[]}`))
+	router.Proxy().ServeHTTP(httptest.NewRecorder(), req)
+	expectCall(t, calls, "stop gpu-worker.service")
+	expectCall(t, calls, "start vllm")
+	select {
+	case got := <-calls:
+		t.Fatalf("unexpected call %q (other.service is not displaced)", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

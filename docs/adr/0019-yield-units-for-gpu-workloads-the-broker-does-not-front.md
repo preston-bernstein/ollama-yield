@@ -8,7 +8,7 @@ The Broker's law is to yield the GPU to gaming and Plex (ADR-0003, ADR-0004). It
 
 A unit may have only one controller. `Load()` rejects a repeat in the list and a unit that `UPSTREAM_UNIT_NAME` or a route already stops and starts, because two controllers would race each other on every yield. An empty or unset `BROKER_YIELD_UNITS` is the exact old wiring.
 
-**Rejected: a GPU lease API.** A workload could instead ask the Broker for a batch-class lease, so interactive inference preempts it too (ADR-0004's tiers). That needs a new endpoint, renewal and revocation, and a client inside each workload. The problem in hand is only the gaming/Plex invariant, which this solves with the mechanism already in production. A lease stays open if workloads turn out to compete with Ollama for the GPU in practice.
+**Rejected: a GPU lease API.** (Revisited in ADR-0020, which answers the competition case with displacement.) A workload could instead ask the Broker for a batch-class lease, so interactive inference preempts it too (ADR-0004's tiers). That needs a new endpoint, renewal and revocation, and a client inside each workload. The problem in hand is only the gaming/Plex invariant, which this solves with the mechanism already in production. A lease stays open if workloads turn out to compete with Ollama for the GPU in practice.
 
 **Accepted cost: work in flight is lost on each yield.** Stopping the unit kills whatever the workload was doing. The workload must tolerate that. AudioMuse-AI's queue requeues the interrupted album, and its CPU workers keep going while the GPU worker is down.
 

@@ -86,6 +86,9 @@ const (
 	// triggerIdle is a per-instance idle-unload timeout, driven by
 	// checkIdleLocked.
 	triggerIdle unloadTrigger = "idle"
+	// triggerDisplace is a displaced unit giving way to, or getting back,
+	// the GPU from a displacing route (ADR-0020, displace.go).
+	triggerDisplace unloadTrigger = "displace"
 )
 
 // GPUManager is an optional external GPU consumer (e.g. Tdarr) that the broker
@@ -169,6 +172,13 @@ type Controller struct {
 	// Built once, in NewWithConfirmMulti's filter loop; read-only afterward,
 	// so it is safe to read without holding c.mu. See ConfigureIdle.
 	origToFiltered []int
+
+	// Displacement (ADR-0020); see displace.go. Nil unless ConfigureDisplace
+	// was called. Guarded by mu.
+	displacers [][]int
+	displaces  [][]int
+	unitWant   []bool
+	pollCount  int
 }
 
 // New returns a Controller in ModeAuto, not yielding, that acts on the first
@@ -389,8 +399,14 @@ func (c *Controller) TrackActivity(origIdx int, next http.Handler) http.Handler 
 		// checkIdleLocked's own startAction-then-spawn sequencing.
 		if c.idleUnloaded[post].CompareAndSwap(true, false) {
 			c.mu.Lock()
+			// Units this instance displaces stop first; the reload waits
+			// for them so the two never hold VRAM at once (ADR-0020).
+			unitWaits := c.stopDisplacedLocked(post)
 			wait, done := c.startAction(post)
 			c.mu.Unlock()
+			if len(unitWaits) > 0 {
+				wait = afterAll(append(unitWaits, wait)...)
+			}
 			go c.doReload(post, wait, done, triggerIdle)
 		}
 		next.ServeHTTP(w, r)
@@ -427,6 +443,8 @@ func (c *Controller) refresh() {
 	c.lastPoll = time.Now()
 	event, r := c.applyLocked()
 	c.checkIdleLocked()
+	c.pollCount++
+	c.reconcileDisplacedLocked()
 	c.mu.Unlock()
 	logTransition(event, r)
 }
@@ -495,6 +513,9 @@ func (c *Controller) applyLocked() (event, reason string) {
 		for i := range c.unloaders {
 			wait, done := c.startAction(i)
 			go c.doUnload(i, wait, done, triggerYield)
+			if c.isDisplaced(i) {
+				c.unitWant[i] = false
+			}
 		}
 		if mgr != nil {
 			go c.pauseGPUMgr(mgr)
@@ -503,6 +524,11 @@ func (c *Controller) applyLocked() (event, reason string) {
 	}
 	c.serveCtx, c.serveCancel = context.WithCancel(context.Background())
 	for i := range c.unloaders {
+		// A displaced unit is started by reconcileDisplacedLocked, which runs
+		// later in this same refresh and only if no displacer holds the GPU.
+		if c.isDisplaced(i) {
+			continue
+		}
 		// An instance with an idle timeout reloads only if it was in use
 		// before the Yield. One that was idle-unloaded, or has been idle
 		// past its timeout, stays unloaded and is marked idle-unloaded, so

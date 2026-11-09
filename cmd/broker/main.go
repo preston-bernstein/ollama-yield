@@ -362,6 +362,10 @@ func main() {
 // variable so tests can record stop/start without running systemctl.
 var newUnitUnloader = backend.NewUnitUnloader
 
+// routeUnloader returns route rb's Unloader. A variable for the same reason as
+// newUnitUnloader: ConfigureDisplace stops a displacing route at construction.
+var routeUnloader = func(_ config.RouteBackend, b backend.Backend) yield.Unloader { return b.Unloader() }
+
 func buildBroker(cfg *config.Config, detector yield.Detector, be backend.Backend) (router *backend.Router, activeBackend backend.Backend, ctrl *yield.Controller, idleStatus func() any, err error) {
 	// BROKER_YIELD_UNITS (ADR-0019) go after the default backend and every
 	// route, so the orig indexes 0..len(cfg.Routes) keep their meaning. They
@@ -432,6 +436,20 @@ func buildBroker(cfg *config.Config, detector yield.Detector, be backend.Backend
 		}
 		ctrl.ConfigureIdle(idleTimeouts)
 
+		// BROKER_ROUTE_<N>_DISPLACES (ADR-0020), in the same orig index space:
+		// route i is i+1, yield unit k is 1+len(cfg.Routes)+k.
+		unitOrig := map[string]int{}
+		for k, u := range cfg.YieldUnits {
+			unitOrig[u] = 1 + len(cfg.Routes) + k
+		}
+		displace := map[int][]int{}
+		for i, rb := range cfg.Routes {
+			for _, u := range rb.Displaces {
+				displace[i+1] = append(displace[i+1], unitOrig[u])
+			}
+		}
+		ctrl.ConfigureDisplace(displace)
+
 		// Decorate in place — orig index 0 is the default backend, i+1 is
 		// route i — BEFORE NewRouter/AddRoute below capture these values.
 		if cfg.UpstreamIdleTimeout != 0 {
@@ -488,7 +506,7 @@ func buildRoutes(cfg *config.Config) (backends []backend.Backend, unloaders []yi
 			return nil, nil, nil, fmt.Errorf("route %d (%v): %w", i, rb.Models, err)
 		}
 		backends[i] = b
-		unloaders[i] = b.Unloader()
+		unloaders[i] = routeUnloader(rb, b)
 		labels[i] = rb.URL.String()
 	}
 	return backends, unloaders, labels, nil

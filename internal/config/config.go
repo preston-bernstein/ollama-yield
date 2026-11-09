@@ -44,6 +44,11 @@ type RouteBackend struct {
 	// Lane optionally scopes this rule to a single lane: "interactive" or
 	// "batch". Empty (the default) means the rule applies to both lanes.
 	Lane string
+	// Displaces lists BROKER_YIELD_UNITS entries that give this instance the
+	// GPU (BROKER_ROUTE_<N>_DISPLACES, comma separated; ADR-0020): they run
+	// only while this instance is idle-unloaded. Requires IdleTimeout, so the
+	// instance always hands the GPU back.
+	Displaces []string
 }
 
 // Config holds all broker runtime settings.
@@ -443,12 +448,16 @@ func Load() (*Config, error) {
 				UnitName:    routeUnitName,
 				IdleTimeout: routeIdleTimeout,
 				Lane:        lane,
+				Displaces:   splitList(getenv(prefix+"DISPLACES", "")),
 			})
 		}
 	}
 
 	yieldUnits, err := parseYieldUnits(getenv("BROKER_YIELD_UNITS", ""), unitName, routes)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkDisplaces(routes, yieldUnits); err != nil {
 		return nil, err
 	}
 
@@ -530,6 +539,37 @@ func parseYieldUnits(raw, upstreamUnit string, routes []RouteBackend) ([]string,
 		owners[u] = "BROKER_YIELD_UNITS"
 	}
 	return units, nil
+}
+
+// checkDisplaces validates every BROKER_ROUTE_<N>_DISPLACES (ADR-0020). A
+// displaced unit must be a yield unit, since only those have a controller of
+// their own to start and stop. A displacer needs an idle timeout, or it would
+// keep the units off forever after its first request.
+func checkDisplaces(routes []RouteBackend, yieldUnits []string) error {
+	known := map[string]bool{}
+	for _, u := range yieldUnits {
+		known[u] = true
+	}
+	for i, rb := range routes {
+		if len(rb.Displaces) == 0 {
+			continue
+		}
+		key := fmt.Sprintf("BROKER_ROUTE_%d_DISPLACES", i+1)
+		if rb.IdleTimeout == 0 {
+			return fmt.Errorf("%s is set but BROKER_ROUTE_%d_IDLE_TIMEOUT is not; a displacing route must idle-unload to hand the GPU back", key, i+1)
+		}
+		seen := map[string]bool{}
+		for _, u := range rb.Displaces {
+			if !known[u] {
+				return fmt.Errorf("%s: %q is not in BROKER_YIELD_UNITS", key, u)
+			}
+			if seen[u] {
+				return fmt.Errorf("%s: %q is listed twice", key, u)
+			}
+			seen[u] = true
+		}
+	}
+	return nil
 }
 
 func splitList(raw string) []string {
