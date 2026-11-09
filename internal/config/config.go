@@ -144,6 +144,11 @@ type Config struct {
 	// Each must be unique and must not repeat UPSTREAM_UNIT_NAME or any
 	// BROKER_ROUTE_<N>_UNIT_NAME. Nil turns this off.
 	YieldUnits []string
+	// UnitResumeHoldoff is how long a displaced yield unit's GPU must stay
+	// free (no Broker yield, every displacer idle-unloaded) before the
+	// Broker starts the unit again (BROKER_YIELD_UNIT_RESUME_HOLDOFF,
+	// ADR-0021). Zero starts it on the first free tick, as before.
+	UnitResumeHoldoff time.Duration
 	// CPUModels are models that run on CPU only (BROKER_CPU_MODELS, comma
 	// separated). Their requests skip the GPU slot and GPU yields
 	// (ADR-0018). Nil turns the bypass off.
@@ -460,6 +465,13 @@ func Load() (*Config, error) {
 	if err := checkDisplaces(routes, yieldUnits); err != nil {
 		return nil, err
 	}
+	urh, err := getdur("BROKER_YIELD_UNIT_RESUME_HOLDOFF", 0)
+	if err != nil {
+		return nil, err
+	}
+	if urh < 0 {
+		return nil, fmt.Errorf("BROKER_YIELD_UNIT_RESUME_HOLDOFF must not be negative, got %v", urh)
+	}
 
 	return &Config{
 		InteractiveAddr:     getenv("BROKER_INTERACTIVE_ADDR", ":11435"),
@@ -485,6 +497,7 @@ func Load() (*Config, error) {
 		MaxWaiters:          mw,
 		MaxInflight:         mi,
 		YieldUnits:          yieldUnits,
+		UnitResumeHoldoff:   urh,
 		CPUModels:           splitList(getenv("BROKER_CPU_MODELS", "")),
 		BatchQuantum:        bq,
 		JobDBPath:           getenv("BROKER_JOB_DB", "broker-jobs.db"),

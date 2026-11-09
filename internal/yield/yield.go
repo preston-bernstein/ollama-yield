@@ -179,6 +179,10 @@ type Controller struct {
 	displaces  [][]int
 	unitWant   []bool
 	pollCount  int
+	// Resume hold-off (ADR-0021): unitFreeSince[j] is when unit j's GPU
+	// last became free, zero while it is not free.
+	unitHoldoff   time.Duration
+	unitFreeSince []time.Time
 }
 
 // New returns a Controller in ModeAuto, not yielding, that acts on the first
