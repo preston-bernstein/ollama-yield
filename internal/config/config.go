@@ -133,6 +133,12 @@ type Config struct {
 	MaxWaiters int
 	// MaxInflight caps concurrent requests reaching Ollama (ADR-0004).
 	MaxInflight int
+	// YieldUnits are extra systemd units the Broker stops on yield-start and
+	// starts on yield-clear (BROKER_YIELD_UNITS, comma separated), for GPU
+	// workloads that are not inference backends the Broker fronts (ADR-0019).
+	// Each must be unique and must not repeat UPSTREAM_UNIT_NAME or any
+	// BROKER_ROUTE_<N>_UNIT_NAME. Nil turns this off.
+	YieldUnits []string
 	// CPUModels are models that run on CPU only (BROKER_CPU_MODELS, comma
 	// separated). Their requests skip the GPU slot and GPU yields
 	// (ADR-0018). Nil turns the bypass off.
@@ -441,6 +447,11 @@ func Load() (*Config, error) {
 		}
 	}
 
+	yieldUnits, err := parseYieldUnits(getenv("BROKER_YIELD_UNITS", ""), unitName, routes)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		InteractiveAddr:     getenv("BROKER_INTERACTIVE_ADDR", ":11435"),
 		BatchAddr:           getenv("BROKER_BATCH_ADDR", ":11436"),
@@ -464,6 +475,7 @@ func Load() (*Config, error) {
 		PlexToken:           getenv("PLEX_TOKEN", ""),
 		MaxWaiters:          mw,
 		MaxInflight:         mi,
+		YieldUnits:          yieldUnits,
 		CPUModels:           splitList(getenv("BROKER_CPU_MODELS", "")),
 		BatchQuantum:        bq,
 		JobDBPath:           getenv("BROKER_JOB_DB", "broker-jobs.db"),
@@ -497,6 +509,29 @@ func parseBaseURL(key, raw string) (*url.URL, error) {
 
 // splitList splits a comma-separated value, trimming spaces and dropping
 // empty entries. It returns nil when nothing is left.
+// parseYieldUnits reads BROKER_YIELD_UNITS. A unit already stopped and
+// started by the default backend or a route would get two controllers
+// racing each other on every yield, so that is rejected, as is a repeat.
+func parseYieldUnits(raw, upstreamUnit string, routes []RouteBackend) ([]string, error) {
+	owners := map[string]string{}
+	if upstreamUnit != "" {
+		owners[upstreamUnit] = "UPSTREAM_UNIT_NAME"
+	}
+	for i, rb := range routes {
+		if rb.UnitName != "" {
+			owners[rb.UnitName] = fmt.Sprintf("BROKER_ROUTE_%d_UNIT_NAME", i+1)
+		}
+	}
+	units := splitList(raw)
+	for _, u := range units {
+		if owner, ok := owners[u]; ok {
+			return nil, fmt.Errorf("BROKER_YIELD_UNITS: %q is already used by %s", u, owner)
+		}
+		owners[u] = "BROKER_YIELD_UNITS"
+	}
+	return units, nil
+}
+
 func splitList(raw string) []string {
 	var out []string
 	for _, part := range strings.Split(raw, ",") {

@@ -13,6 +13,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -447,5 +448,74 @@ func TestMainInteractiveProxyTracksActivityOnNoRoutesPath(t *testing.T) {
 			"1.2s pre-request wait), want near-zero — this means interactiveProxy is not the activity-tracked backend "+
 			"(the bug: main() used the pre-buildBroker be instead of the returned activeBackend). Full /status: %+v\nbroker output:\n%s",
 			since, st, buf.String())
+	}
+}
+
+// recordingUnloader records each Unload/Reload as "stop <unit>"/"start <unit>".
+type recordingUnloader struct {
+	unit  string
+	calls chan<- string
+}
+
+func (r recordingUnloader) Unload(context.Context) error { r.calls <- "stop " + r.unit; return nil }
+func (r recordingUnloader) Reload(context.Context) error { r.calls <- "start " + r.unit; return nil }
+
+func expectCall(t *testing.T, calls <-chan string, want string) {
+	t.Helper()
+	select {
+	case got := <-calls:
+		if got != want {
+			t.Fatalf("unloader call = %q, want %q", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %q", want)
+	}
+}
+
+// TestBuildBrokerStopsAndStartsYieldUnits checks BROKER_YIELD_UNITS (ADR-0019)
+// on both branches of buildBroker: each unit is stopped when the Broker yields
+// and started when the yield clears, in that order.
+func TestBuildBrokerStopsAndStartsYieldUnits(t *testing.T) {
+	routeURL, err := url.Parse("http://127.0.0.1:19998")
+	if err != nil {
+		t.Fatalf("parse route url: %v", err)
+	}
+	cases := map[string][]config.RouteBackend{
+		"no routes": nil,
+		"with a route": {{
+			Models: []string{"test-model"}, Backend: "openai", URL: routeURL,
+		}},
+	}
+	for name, routes := range cases {
+		t.Run(name, func(t *testing.T) {
+			calls := make(chan string, 8)
+			orig := newUnitUnloader
+			newUnitUnloader = func(unit string) yield.Unloader { return recordingUnloader{unit, calls} }
+			t.Cleanup(func() { newUnitUnloader = orig })
+
+			defaultURL, err := url.Parse("http://127.0.0.1:19999")
+			if err != nil {
+				t.Fatalf("parse default url: %v", err)
+			}
+			be, err := backend.NewInstance("openai", defaultURL, "", "")
+			if err != nil {
+				t.Fatalf("build default backend: %v", err)
+			}
+			cfg := &config.Config{
+				DetectInterval:    time.Minute,
+				YieldConfirmPolls: 1,
+				Routes:            routes,
+				YieldUnits:        []string{"gpu-worker.service"},
+			}
+			_, _, ctrl, _, err := buildBroker(cfg, stubDetector{}, be)
+			if err != nil {
+				t.Fatalf("buildBroker: %v", err)
+			}
+
+			ctrl.SetMode(yield.ModeForceYield)
+			expectCall(t, calls, "stop gpu-worker.service")
+			ctrl.SetMode(yield.ModeAuto)
+			expectCall(t, calls, "start gpu-worker.service")
+		})
 	}
 }
