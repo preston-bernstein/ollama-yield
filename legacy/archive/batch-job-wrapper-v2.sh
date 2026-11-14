@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# sh-allow: nostrict legacy script with no bats test yet; strict mode would change its error handling
 # batch-job-wrapper.sh v2
 # Handles batch jobs with retry and model cleanup
 # IMPROVED: Waits for gaming state to end before retrying
@@ -25,18 +26,20 @@ wait_for_gaming_end() {
     wait_count=$((wait_count + 1))
     # Log every minute
     if [ $((wait_count % 6)) -eq 0 ]; then
+      # shellcheck disable=SC2004 # existing pattern; unchanged in the pack-compliance pass
       log "Still waiting for gaming to end ($(($wait_count * 10))s elapsed)..."
     fi
   done
 
   if [ $wait_count -gt 0 ]; then
+    # shellcheck disable=SC2004 # existing pattern; unchanged in the pack-compliance pass
     log "Gaming ended after $(($wait_count * 10))s, ready to retry"
   fi
 }
 
 # Ensure small model is loaded first
 log "Ensuring $SMALL_MODEL is loaded for home automation..."
-ollama run $SMALL_MODEL "ready" > /dev/null 2>&1
+ollama run $SMALL_MODEL "ready" >/dev/null 2>&1
 
 # Run batch job with retry logic
 log "Starting batch job with $LARGE_MODEL..."
@@ -47,6 +50,7 @@ while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
   log "Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES"
 
   # Run the batch job
+  # shellcheck disable=SC2086 # existing pattern; unchanged in the pack-compliance pass
   ollama run $LARGE_MODEL "$PROMPT"
   EXIT_CODE=$?
 
@@ -76,6 +80,6 @@ done
 
 # Always reload small model when done
 log "Reloading $SMALL_MODEL for home automation..."
-ollama run $SMALL_MODEL "ready" > /dev/null 2>&1
+ollama run $SMALL_MODEL "ready" >/dev/null 2>&1
 
 log "Small model loaded and ready. Batch job wrapper complete."
