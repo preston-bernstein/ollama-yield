@@ -64,7 +64,7 @@ func TestNoRFC1918AddressInModuleSource(t *testing.T) {
 			// .claude/worktrees: a *separate* git worktree checkout (its
 			// own branch, its own history) living under this repo's
 			// working directory — not this module's source tree.
-			case ".git", "legacy":
+			case ".git", "legacy", "vendor":
 				return filepath.SkipDir
 			}
 			if strings.HasSuffix(path, filepath.Join(".claude", "worktrees")) {
